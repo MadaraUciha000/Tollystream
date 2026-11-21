@@ -15,21 +15,21 @@ Every release on a 1TamilMV topic is exposed as a playable link:
 
 ## Install
 
-1. Build the repository once (GitHub Actions does this automatically, see below).
-2. In CloudStream: **Settings → Extensions → Add repository** and paste:
+1. In CloudStream: **Settings → Extensions → Add repository** and paste:
 
 ```
-https://raw.githubusercontent.com/USERNAME/Tollystream/builds/repo.json
+https://raw.githubusercontent.com/MadaraUciha000/Tollystream/builds/repo.json
 ```
 
-Replace `USERNAME` with the GitHub account that owns the repo. The workflow rewrites the
-`REPO` placeholder inside `repo.json` with your real `owner/repo` while publishing, so the
-copy on the `builds` branch is already correct - the URL above only has to be fixed if you
-serve `repo.json` from somewhere else.
+   The `builds` part matters. The `repo.json` in the root of the `main` branch is a source
+   file; only the copy on the `builds` branch is ready to install.
 
-3. Open the repository and install **Tollystream**.
-4. Torrent playback uses CloudStream's bundled torrent server. If playback stalls, check
+2. Open the repository and install **Tollystream**.
+3. Torrent playback uses CloudStream's bundled torrent server. If playback stalls, check
    that your network allows BitTorrent traffic (some ISPs block trackers).
+
+> If the repository shows **no plugins**, you added the main-branch URL (or a `REPO`
+> placeholder). Delete that repository entry and re-add the `builds/repo.json` URL above.
 
 ---
 

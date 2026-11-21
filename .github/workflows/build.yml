@@ -56,7 +56,7 @@ jobs:
           ./gradlew make makePluginsJson --stacktrace --no-daemon
           find . -name '*.cs3' -exec cp {} $GITHUB_WORKSPACE/builds/ \;
           find . -name 'plugins.json' -exec cp {} $GITHUB_WORKSPACE/builds/ \;
-          sed "s|REPO|${GITHUB_REPOSITORY}|g" repo.json > $GITHUB_WORKSPACE/builds/repo.json
+          sed -E "s|raw.githubusercontent.com/[^/]+/[^/]+/builds/plugins.json|raw.githubusercontent.com/${GITHUB_REPOSITORY}/builds/plugins.json|" repo.json > $GITHUB_WORKSPACE/builds/repo.json
 
       - name: Push builds
         run: |
