@@ -27,6 +27,9 @@ data class ListingItem(
 )
 
 object Parser {
+    /** Short provider code used by Tollystream integrations. */
+    const val SHORT_CODE = "tolly"
+
     private val QUALITY_RE = Regex("\\b(2160p|1080p|720p|480p|360p|4k)\\b", RegexOption.IGNORE_CASE)
     private val SIZE_RE = Regex("\\b(\\d+(?:\\.\\d+)?\\s?(?:GB|MB))\\b", RegexOption.IGNORE_CASE)
     private val YEAR_RE = Regex("\\b(19|20)\\d{2}\\b")
@@ -145,8 +148,8 @@ object Parser {
             ?: doc.selectFirst("div.cPost")
             ?: doc.body()
 
-        val poster = post.select("img")
-            .map { Domains.absolute(base, it.attr("src")) }
+        val poster = post.select("img.ipsImage, img")
+            .mapNotNull { imageUrl(it, base) }
             .firstOrNull { isPoster(it) }
 
         val releases = ArrayList<Release>()
@@ -222,6 +225,19 @@ object Parser {
         }
 
         return Topic(url, title, poster, releases)
+    }
+
+    /** Forums may put the real image URL in a lazy-loading attribute. */
+    private fun imageUrl(image: Element, base: String): String? {
+        val source = listOf(
+            image.attr("src"),
+            image.attr("data-src"),
+            image.attr("data-original"),
+            image.attr("data-lazy-src"),
+            image.attr("data-image"),
+            image.attr("srcset").substringBefore(',').substringBefore(' '),
+        ).firstOrNull { it.isNotBlank() } ?: return null
+        return Domains.absolute(base, source)
     }
 
     fun cleanTitle(raw: String): String {

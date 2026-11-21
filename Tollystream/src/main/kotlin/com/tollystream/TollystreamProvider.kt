@@ -195,6 +195,7 @@ class TollystreamProvider : MainAPI() {
                         gate.withPermit {
                             item to withTimeoutOrNull(POSTER_TIMEOUT_MS) {
                                 Tmdb.poster(item.title, Parser.yearOf(item.title))
+                                    ?: scrapeForumPoster(item.url)
                             }
                         }
                     }
@@ -208,6 +209,15 @@ class TollystreamProvider : MainAPI() {
                 this.year = Parser.yearOf(item.title)
             }
         }
+    }
+
+    /** Fallback for titles missing from TMDB: scrape the banner from the topic post. */
+    private suspend fun scrapeForumPoster(url: String): String? {
+        return runCatching {
+            val (html, base) = fetchTopic(url)
+            val fixed = Domains.rewrite(url, base)
+            Parser.parseTopic(html, fixed, base).poster
+        }.getOrNull()
     }
 
     private fun linkLabel(release: Release): String {

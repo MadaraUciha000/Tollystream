@@ -1,4 +1,4 @@
-# Tollystream
+# Tollystream (`tolly`)
 
 **Author: Taisir Shaik**
 
