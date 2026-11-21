@@ -1,10 +1,16 @@
 package com.tollystream
 
+import com.lagradost.cloudstream3.Actor
+import com.lagradost.cloudstream3.ActorData
+import com.lagradost.cloudstream3.ActorRole
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageData
 import com.lagradost.cloudstream3.MainPageRequest
-import com.lagradost.cloudstream3.HomePageResponse
-import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.Score
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
@@ -17,11 +23,21 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 
 class TollystreamProvider : MainAPI() {
     companion object {
         const val PROVIDER_NAME = "Tollystream"
         private const val CATALOG_TTL_MS = 10 * 60 * 1000L
+        private const val POSTER_LOOKUPS = 12
+        private const val POSTER_BATCH_TIMEOUT_MS = 9_000L
+        private const val POSTER_TIMEOUT_MS = 3_500L
+        private const val DETAILS_TIMEOUT_MS = 12_000L
 
         @Volatile
         private var catalog: List<Pair<String, String>>? = null
@@ -53,8 +69,7 @@ class TollystreamProvider : MainAPI() {
 
         val (html, base) = fetchSection(request.data)
         val items = Parser.parseListing(html, base, forumPage = request.data != "home")
-        val results = items.map { newMovieSearchResponse(it.title, it.url, TvType.Movie) }
-        return newHomePageResponse(request.name, results, false)
+        return newHomePageResponse(request.name, toResults(items), false)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -69,7 +84,11 @@ class TollystreamProvider : MainAPI() {
             }
             .distinctBy { it.second }
             .take(60)
-            .map { newMovieSearchResponse(it.first, it.second, TvType.Movie) }
+            .map { (title, url) ->
+                newMovieSearchResponse(title, url, TvType.Movie) {
+                    this.year = Parser.yearOf(title)
+                }
+            }
             .toList()
     }
 
@@ -77,17 +96,37 @@ class TollystreamProvider : MainAPI() {
         val (html, base) = fetchTopic(url)
         val fixed = Domains.rewrite(url, base)
         val topic = Parser.parseTopic(html, fixed, base)
-        val title = topic.title.ifBlank { Parser.titleFromUrl(fixed) }
+        val topicTitle = topic.title.ifBlank { Parser.titleFromUrl(fixed) }
+        val topicYear = Parser.yearOf(topicTitle)
 
-        return newMovieLoadResponse(title, fixed, TvType.Movie, fixed) {
-            this.posterUrl = topic.poster
-            this.year = Parser.yearOf(title)
-            this.plot = topic.releases.joinToString("\n") { release ->
-                listOfNotNull(release.quality, release.size, release.title.take(90))
-                    .distinct()
-                    .joinToString("  •  ")
-            }.ifBlank { null }
-            this.tags = topic.releases.mapNotNull { it.quality }.distinct()
+        val meta = withTimeoutOrNull(DETAILS_TIMEOUT_MS) { Tmdb.details(topicTitle, topicYear) }
+
+        val displayName = when {
+            meta == null -> topicTitle
+            meta.year != null -> "${meta.title} (${meta.year})"
+            else -> meta.title
+        }
+
+        val releasePlot = topic.releases.joinToString("\n") { release ->
+            listOfNotNull(release.quality, release.size, release.title.take(90))
+                .distinct()
+                .joinToString("  •  ")
+        }
+
+        return newMovieLoadResponse(displayName, fixed, TvType.Movie, fixed) {
+            this.posterUrl = meta?.poster ?: topic.poster
+            this.backgroundPosterUrl = meta?.backdrop
+            this.plot = meta?.overview ?: releasePlot.ifBlank { null }
+            this.year = meta?.year ?: topicYear
+            this.duration = meta?.runtime
+            this.tags = meta?.genres?.takeIf { it.isNotEmpty() }
+                ?: topic.releases.mapNotNull { it.quality }.distinct()
+            this.score = meta?.rating?.let { Score.from10(it) }
+            this.actors = meta?.cast
+                ?.takeIf { it.isNotEmpty() }
+                ?.map { ActorData(Actor(it.name, it.image), ActorRole.Main) }
+            meta?.imdbId?.let { addImdbId(it) }
+            meta?.trailerKey?.let { addTrailer("https://www.youtube.com/watch?v=$it") }
         }
     }
 
@@ -138,6 +177,37 @@ class TollystreamProvider : MainAPI() {
         }
 
         return emitted
+    }
+
+    /**
+     * Listing cards have no images, so the first few per row are matched against TMDB
+     * for a poster. Bounded on purpose: the row must not stall on a slow TMDB.
+     */
+    private suspend fun toResults(items: List<ListingItem>): List<SearchResponse> {
+        if (items.isEmpty()) return emptyList()
+
+        val head = items.take(POSTER_LOOKUPS)
+        val posters = withTimeoutOrNull(POSTER_BATCH_TIMEOUT_MS) {
+            coroutineScope {
+                val gate = Semaphore(8)
+                head.map { item ->
+                    async {
+                        gate.withPermit {
+                            item to withTimeoutOrNull(POSTER_TIMEOUT_MS) {
+                                Tmdb.poster(item.title, Parser.yearOf(item.title))
+                            }
+                        }
+                    }
+                }.awaitAll().toMap()
+            }
+        } ?: emptyMap()
+
+        return items.map { item ->
+            newMovieSearchResponse(item.title, item.url, TvType.Movie) {
+                this.posterUrl = posters[item]
+                this.year = Parser.yearOf(item.title)
+            }
+        }
     }
 
     private fun linkLabel(release: Release): String {

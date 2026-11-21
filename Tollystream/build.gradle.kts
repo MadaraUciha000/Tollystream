@@ -1,16 +1,17 @@
-version = 1
+version = 2
 
 plugins {
     id("com.lagradost.cloudstream3.gradle")
 }
 
-val ghRepo = System.getenv("GITHUB_REPOSITORY") ?: "USERNAME/Tollystream"
+val ghRepo = System.getenv("GITHUB_REPOSITORY") ?: "MadaraUciha000/Tollystream"
 
 cloudstream {
     language = "ta"
-    authors = listOf("Tollystream")
+    authors = listOf("Taisir Shaik")
     description = "Indian movies from 1TamilMV (Tamil, Telugu, Hindi, Malayalam, Kannada) - " +
-        "torrents, magnets and direct links, with a Cloudflare bypass on every request."
+        "torrents, magnets and direct links, with Cloudflare bypass and TMDB metadata " +
+        "(posters, banners, plot, rating, genres, runtime, cast)."
     status = 1
     tvTypes = listOf("Movie")
     requiresResources = false

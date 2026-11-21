@@ -1,7 +1,10 @@
 # Tollystream
 
+**Author: Taisir Shaik**
+
 A CloudStream 3 extension repository for **Indian movies** sourced from **1TamilMV**
-(Tamil, Telugu, Hindi, Malayalam, Kannada), with a **Cloudflare bypass on every request**.
+(Tamil, Telugu, Hindi, Malayalam, Kannada), with a **Cloudflare bypass on every request**
+and **TMDB metadata** (poster, banner, plot, rating, genres, runtime, cast, IMDb id).
 
 Every release on a 1TamilMV topic is exposed as a playable link:
 
@@ -62,6 +65,23 @@ attachment with the magnet link that follows it, taking the size from the magnet
 parameter and the quality from the file name. Topic titles are taken from the `h1`; home
 cards derive their title from the URL slug (the listing itself only shows sizes).
 
+### TMDB metadata
+`Tmdb.kt` turns a noisy topic title (`O.M: Operation Mole (2026) Tamil HQ PreDVD`) into a
+TMDB match:
+
+1. `cleanQuery` strips year brackets, parentheticals, languages, quality tags, codecs, audio
+   labels and sizes → `O M Operation Mole`,
+2. `/search/movie` is queried with the year, then without it, then with progressively shorter
+   word prefixes,
+3. candidates are scored on title similarity, year match and poster presence,
+4. `/movie/{id}?append_to_response=credits,external_ids` fills in the detail page.
+
+That gives the detail screen its **banner (`backgroundPosterUrl`), poster, overview, rating,
+genres, runtime, top-billed cast with photos, and IMDb id** (used for sync). Home rows have no
+images on 1TamilMV, so the first 12 cards of every row are matched against TMDB for a poster
+(bounded to 9 s per row, 3.5 s per lookup, so a slow TMDB never stalls the row). Any failure
+degrades gracefully to the topic's own poster and release list.
+
 ---
 
 ## Build & deploy
@@ -90,7 +110,9 @@ Artifacts land in `Tollystream/build/`.
 * Torrents take a few seconds to start while peers are found; dead torrents will not play.
 * Domain churn is constant. If everything fails, bump `Domains.candidates`.
 * Search is a local filter over recent topics, not a full-site index.
-* Home cards have no posters (the listing has no images); the poster appears on the detail page.
+* Home cards are poster-less beyond the first 12 per row (the listing has no images).
+* TMDB matching is title-based; an obscure title with an unusual transliteration may not match
+  and then falls back to the site's own data.
 
 ---
 
