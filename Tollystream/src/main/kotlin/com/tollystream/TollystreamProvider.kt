@@ -30,13 +30,13 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 
-class TollystreamProvider : MainAPI() {
+class TollystreamProvider(
+    private val fixedLanguage: String? = null,
+) : MainAPI() {
     companion object {
         const val PROVIDER_NAME = "Tollystream"
         private const val CATALOG_TTL_MS = 10 * 60 * 1000L
-        private const val POSTER_LOOKUPS = 12
-        private const val POSTER_BATCH_TIMEOUT_MS = 9_000L
-        private const val POSTER_TIMEOUT_MS = 3_500L
+        private const val POSTER_TIMEOUT_MS = 2_500L
         private const val DETAILS_TIMEOUT_MS = 12_000L
 
         @Volatile
@@ -47,8 +47,15 @@ class TollystreamProvider : MainAPI() {
     }
 
     override var mainUrl = Domains.candidates.first()
-    override var name = PROVIDER_NAME
-    override var lang = "ta"
+    override var name = fixedLanguage?.let { "$PROVIDER_NAME · ${languageName(it)}" } ?: PROVIDER_NAME
+    override var lang = when (fixedLanguage) {
+        "ta" -> "ta"
+        "te" -> "te"
+        "hi" -> "hi"
+        "ml" -> "ml"
+        "kn" -> "kn"
+        else -> "en"
+    }
 
     override val hasMainPage = true
     override val hasDownloadSupport = true
@@ -65,7 +72,7 @@ class TollystreamProvider : MainAPI() {
                 "kn" to ("Kannada" to "forum/67-kannada-language"),
                 "multi" to ("Multilingual / Hollywood" to "forum/17-hollywood-movies-in-multi-audios"),
             )
-            val selected = TollyPreferences.selected()
+            val selected = fixedLanguage ?: TollyPreferences.selected()
             val visible = languageForums.filter { selected == "all" || it.first == selected }
             return listOf(MainPageData("Latest Releases", "home", false)) +
                 visible.map { (code, pair) -> MainPageData(pair.first, "language:$code:${pair.second}", false) }
@@ -200,29 +207,15 @@ class TollystreamProvider : MainAPI() {
             val label = linkLabel(release)
 
             val magnet = release.magnet
-            val torrent = release.torrent
-            when {
-                !magnet.isNullOrBlank() -> {
-                    callback(
-                        newExtractorLink(PROVIDER_NAME, label, magnet, ExtractorLinkType.MAGNET) {
-                            this.quality = quality
-                            this.referer = fixed
-                            this.headers = mapOf("User-Agent" to USER_AGENT)
-                        }
-                    )
-                    emitted = true
-                }
-
-                !torrent.isNullOrBlank() -> {
-                    callback(
-                        newExtractorLink(PROVIDER_NAME, label, torrent, ExtractorLinkType.TORRENT) {
-                            this.quality = quality
-                            this.referer = fixed
-                            this.headers = mapOf("User-Agent" to USER_AGENT)
-                        }
-                    )
-                    emitted = true
-                }
+            if (!magnet.isNullOrBlank()) {
+                callback(
+                    newExtractorLink(PROVIDER_NAME, label, magnet, ExtractorLinkType.MAGNET) {
+                        this.quality = quality
+                        this.referer = fixed
+                        this.headers = mapOf("User-Agent" to USER_AGENT)
+                    }
+                )
+                emitted = true
             }
 
             for (direct in release.direct) {
@@ -240,22 +233,22 @@ class TollystreamProvider : MainAPI() {
     private suspend fun toResults(items: List<ListingItem>): List<SearchResponse> {
         if (items.isEmpty()) return emptyList()
 
-        val head = items.take(POSTER_LOOKUPS)
-        val posters = withTimeoutOrNull(POSTER_BATCH_TIMEOUT_MS) {
-            coroutineScope {
-                val gate = Semaphore(8)
-                head.map { item ->
-                    async {
-                        gate.withPermit {
-                            item to withTimeoutOrNull(POSTER_TIMEOUT_MS) {
-                                scrapeForumPoster(item.url)
-                                    ?: Tmdb.poster(item.title, Parser.yearOf(item.title))
-                            }
+        val head = items
+        val posters = coroutineScope {
+            val gate = Semaphore(12)
+            head.map { item ->
+                async {
+                    gate.withPermit {
+                        val poster = withTimeoutOrNull(POSTER_TIMEOUT_MS) {
+                            Tmdb.poster(item.title, Parser.yearOf(item.title))
+                        } ?: withTimeoutOrNull(POSTER_TIMEOUT_MS) {
+                            scrapeForumPoster(item.url)
                         }
+                        item to poster
                     }
-                }.awaitAll().toMap()
-            }
-        } ?: emptyMap()
+                }
+            }.awaitAll().toMap()
+        }
 
         return items.map { item ->
             newMovieSearchResponse(item.title, item.url, TvType.Movie) {
@@ -288,6 +281,16 @@ class TollystreamProvider : MainAPI() {
         "480p" -> Qualities.P480.value
         "360p" -> Qualities.P360.value
         else -> Qualities.Unknown.value
+    }
+
+    private fun languageName(code: String): String = when (code) {
+        "ta" -> "Tamil"
+        "te" -> "Telugu"
+        "hi" -> "Hindi"
+        "ml" -> "Malayalam"
+        "kn" -> "Kannada"
+        "multi" -> "Multilingual"
+        else -> code
     }
 
     private fun sectionUrl(base: String, data: String): String {
