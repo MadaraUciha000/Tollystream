@@ -55,24 +55,60 @@ class TollystreamProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie)
     override val hasQuickSearch = false
 
-    override val mainPage = listOf(
-        MainPageData("Latest Releases", "home", false),
-        MainPageData("Tamil", "forum/9-tamil-language", false),
-        MainPageData("Telugu", "forum/22-telugu-language", false),
-        MainPageData("Hindi", "forum/56-hindi-language", false),
-        MainPageData("Malayalam", "forum/34-malayalam-language", false),
-        MainPageData("Kannada", "forum/67-kannada-language", false),
-    )
+    override val mainPage: List<MainPageData>
+        get() {
+            val languageForums = listOf(
+                "ta" to ("Tamil" to "forum/9-tamil-language"),
+                "te" to ("Telugu" to "forum/22-telugu-language"),
+                "hi" to ("Hindi" to "forum/56-hindi-language"),
+                "ml" to ("Malayalam" to "forum/34-malayalam-language"),
+                "kn" to ("Kannada" to "forum/67-kannada-language"),
+                "multi" to ("Multilingual / Hollywood" to "forum/17-hollywood-movies-in-multi-audios"),
+            )
+            val selected = TollyPreferences.selected()
+            val visible = languageForums.filter { selected == "all" || it.first == selected }
+            return listOf(MainPageData("Latest Releases", "home", false)) +
+                visible.map { (code, pair) -> MainPageData(pair.first, "language:$code:${pair.second}", false) }
+        }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         if (page > 1) return newHomePageResponse(request.name, emptyList(), false)
 
         val (html, base) = fetchSection(request.data)
-        val items = Parser.parseListing(html, base, forumPage = request.data != "home")
+        val items = if (request.data.startsWith("language:")) {
+            aggregateLanguageForums(request.data, html, base)
+        } else {
+            Parser.parseListing(html, base, forumPage = request.data != "home")
+        }
         return newHomePageResponse(request.name, toResults(items), false)
     }
 
+    /** Aggregate every child forum discovered on a language landing page. */
+    private suspend fun aggregateLanguageForums(
+        data: String,
+        landingHtml: String,
+        base: String,
+    ): List<ListingItem> {
+        val parentPath = data.substringAfter(':').substringAfter(':')
+        val parentUrl = sectionUrl(base, parentPath)
+        val subforums = Parser.parseSubforums(landingHtml, base)
+        val urls = (listOf("Movies" to parentUrl) + subforums)
+            .distinctBy { it.second }
+        val collected = LinkedHashMap<String, ListingItem>()
+        for ((_, forumUrl) in urls) {
+            val html = if (forumUrl == parentUrl) landingHtml else
+                runCatching { Cloudflare.html(forumUrl) }.getOrNull() ?: continue
+            for (item in Parser.parseListing(html, base, forumPage = true)) {
+                collected.putIfAbsent(Parser.topicId(item.url), item)
+            }
+        }
+        return collected.values.toList()
+    }
+
     override suspend fun search(query: String): List<SearchResponse> {
+        val official = officialSearch(query)
+        if (official.isNotEmpty()) return official
+
         val tokens = query.lowercase().split(Regex("\\s+")).filter { it.length > 1 }
         if (tokens.isEmpty()) return emptyList()
 
@@ -90,6 +126,24 @@ class TollystreamProvider : MainAPI() {
                 }
             }
             .toList()
+    }
+
+    /** Search only the official 1TamilMV site through the Cloudflare client. */
+    private suspend fun officialSearch(query: String): List<SearchResponse> {
+        val clean = query.trim()
+        if (clean.length < 2) return emptyList()
+
+        val base = runCatching { Domains.base() }.getOrElse { Domains.candidates.first() }
+        val url = "$base/search/?q=${java.net.URLEncoder.encode(clean, "UTF-8")}"
+        val items = runCatching {
+            Parser.parseSearch(Cloudflare.html(url), base)
+        }.getOrDefault(emptyList())
+
+        return items.distinctBy { it.url }.take(60).map { item ->
+            newMovieSearchResponse(item.title, item.url, TvType.Movie) {
+                this.year = Parser.yearOf(item.title)
+            }
+        }
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -114,8 +168,8 @@ class TollystreamProvider : MainAPI() {
         }
 
         return newMovieLoadResponse(displayName, fixed, TvType.Movie, fixed) {
-            this.posterUrl = meta?.poster ?: topic.poster
-            this.backgroundPosterUrl = meta?.backdrop
+            this.posterUrl = topic.poster ?: meta?.poster
+            this.backgroundPosterUrl = meta?.backdrop ?: topic.poster
             this.plot = meta?.overview ?: releasePlot.ifBlank { null }
             this.year = meta?.year ?: topicYear
             this.duration = meta?.runtime
@@ -194,8 +248,8 @@ class TollystreamProvider : MainAPI() {
                     async {
                         gate.withPermit {
                             item to withTimeoutOrNull(POSTER_TIMEOUT_MS) {
-                                Tmdb.poster(item.title, Parser.yearOf(item.title))
-                                    ?: scrapeForumPoster(item.url)
+                                scrapeForumPoster(item.url)
+                                    ?: Tmdb.poster(item.title, Parser.yearOf(item.title))
                             }
                         }
                     }
@@ -274,7 +328,14 @@ class TollystreamProvider : MainAPI() {
         if (cached != null && now - catalogAt < CATALOG_TTL_MS) return cached
 
         val merged = LinkedHashMap<String, String>()
-        val sections = listOf("home") + mainPage.map { it.data }.filter { it != "home" }
+        val sections = listOf("home") + listOf(
+            "forum/9-tamil-language",
+            "forum/22-telugu-language",
+            "forum/56-hindi-language",
+            "forum/34-malayalam-language",
+            "forum/67-kannada-language",
+            "forum/17-hollywood-movies-in-multi-audios",
+        )
 
         for (section in sections) {
             val page = runCatching { fetchSection(section) }.getOrNull() ?: continue

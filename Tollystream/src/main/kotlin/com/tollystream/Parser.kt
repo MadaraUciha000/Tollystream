@@ -102,6 +102,25 @@ object Parser {
         return seen.values.toList()
     }
 
+    /** Search results use the same topic links as forum listings. */
+    fun parseSearch(html: String, base: String): List<ListingItem> =
+        parseListing(html, base, forumPage = true)
+
+    /** Discover every subforum linked from a language landing page. */
+    fun parseSubforums(html: String, base: String): List<Pair<String, String>> {
+        val doc = Jsoup.parse(html, base)
+        val found = LinkedHashMap<String, Pair<String, String>>()
+        for (anchor in doc.select("a[href*='forums/forum/']")) {
+            val href = anchor.attr("href").trim()
+            val title = anchor.text().trim()
+            if (href.isBlank() || title.isBlank()) continue
+            val absolute = Domains.absolute(base, href)
+            val id = Regex("""/forums/forum/(\d+)-""").find(absolute)?.groupValues?.get(1) ?: continue
+            found.putIfAbsent(id, title to absolute)
+        }
+        return found.values.toList()
+    }
+
     /** Derive a readable movie name from a topic slug. */
     fun titleFromUrl(url: String): String {
         var slug = if (url.contains("/topic/")) url.substringAfterLast("/topic/") else url
@@ -236,7 +255,7 @@ object Parser {
             image.attr("data-lazy-src"),
             image.attr("data-image"),
             image.attr("srcset").substringBefore(',').substringBefore(' '),
-        ).firstOrNull { it.isNotBlank() } ?: return null
+        ).firstOrNull { it.startsWith("http://") || it.startsWith("https://") } ?: return null
         return Domains.absolute(base, source)
     }
 
@@ -292,7 +311,8 @@ object Parser {
         if (lower.contains("attachment.php")) return false
         if (lower.endsWith(".gif")) return false
         return lower.contains("pixelbb") || lower.contains("upload") || lower.contains("image") ||
-            lower.contains("poster") || lower.contains("img")
+            lower.contains("poster") || lower.contains("img") ||
+            Regex("""\.(jpg|jpeg|png|webp)(?:\?|$)""").containsMatchIn(lower)
     }
 
     private fun isDirect(href: String, text: String): Boolean {
