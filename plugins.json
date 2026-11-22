@@ -1,0 +1,22 @@
+[
+    {
+        "url": "https://raw.githubusercontent.com/MadaraUciha000/Tollystream/builds/Tollystream.cs3",
+        "status": 1,
+        "version": 3,
+        "name": "Tollystream",
+        "internalName": "Tollystream",
+        "authors": [
+            "Taisir Shaik"
+        ],
+        "description": "Indian movies from 1TamilMV (Tamil, Telugu, Hindi, Malayalam, Kannada) - torrents, magnets and direct links, with Cloudflare bypass and TMDB metadata (posters, banners, plot, rating, genres, runtime, cast).",
+        "fileSize": 56107,
+        "repositoryUrl": "https://github.com/MadaraUciha000/Tollystream",
+        "language": "ta",
+        "tvTypes": [
+            "Movie"
+        ],
+        "iconUrl": "https://raw.githubusercontent.com/MadaraUciha000/Tollystream/main/Tollystream/icon.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-fe190e2ae5f26afeabe794c17bb6f9998057caa46f9dd673c2d5c086bd7614b7"
+    }
+]
