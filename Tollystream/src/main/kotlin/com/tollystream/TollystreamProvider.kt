@@ -25,6 +25,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -36,8 +37,10 @@ class TollystreamProvider(
     companion object {
         const val PROVIDER_NAME = "Tollystream"
         private const val CATALOG_TTL_MS = 10 * 60 * 1000L
-        private const val POSTER_TIMEOUT_MS = 2_500L
+        private const val POSTER_LOOKUPS = 6
+        private const val POSTER_TIMEOUT_MS = 2_000L
         private const val DETAILS_TIMEOUT_MS = 12_000L
+        private val SUBFORUM_GATE = Semaphore(4)
 
         @Volatile
         private var catalog: List<Pair<String, String>>? = null
@@ -101,13 +104,21 @@ class TollystreamProvider(
         val subforums = Parser.parseSubforums(landingHtml, base)
         val urls = (listOf("Movies" to parentUrl) + subforums)
             .distinctBy { it.second }
+        val pages = coroutineScope {
+            urls.map { (_, forumUrl) ->
+                async {
+                    val html = if (forumUrl == parentUrl) landingHtml else {
+                        SUBFORUM_GATE.withPermit {
+                            withTimeoutOrNull(8_000L) { Cloudflare.html(forumUrl, timeout = 8) }
+                        }
+                    }
+                    html?.let { Parser.parseListing(it, base, forumPage = true) }.orEmpty()
+                }
+            }.awaitAll()
+        }
         val collected = LinkedHashMap<String, ListingItem>()
-        for ((_, forumUrl) in urls) {
-            val html = if (forumUrl == parentUrl) landingHtml else
-                runCatching { Cloudflare.html(forumUrl) }.getOrNull() ?: continue
-            for (item in Parser.parseListing(html, base, forumPage = true)) {
-                collected.putIfAbsent(Parser.topicId(item.url), item)
-            }
+        pages.flatten().forEach { item ->
+            collected.putIfAbsent(Parser.topicId(item.url), item)
         }
         return collected.values.toList()
     }
@@ -233,16 +244,14 @@ class TollystreamProvider(
     private suspend fun toResults(items: List<ListingItem>): List<SearchResponse> {
         if (items.isEmpty()) return emptyList()
 
-        val head = items
+        val head = items.take(POSTER_LOOKUPS)
         val posters = coroutineScope {
-            val gate = Semaphore(12)
+            val gate = Semaphore(POSTER_LOOKUPS)
             head.map { item ->
                 async {
                     gate.withPermit {
                         val poster = withTimeoutOrNull(POSTER_TIMEOUT_MS) {
                             Tmdb.poster(item.title, Parser.yearOf(item.title))
-                        } ?: withTimeoutOrNull(POSTER_TIMEOUT_MS) {
-                            scrapeForumPoster(item.url)
                         }
                         item to poster
                     }
@@ -252,7 +261,7 @@ class TollystreamProvider(
 
         return items.map { item ->
             newMovieSearchResponse(item.title, item.url, TvType.Movie) {
-                this.posterUrl = posters[item]
+            this.posterUrl = posters[item]
                 this.year = Parser.yearOf(item.title)
             }
         }
@@ -306,6 +315,8 @@ class TollystreamProvider(
         var base = Domains.base()
         return try {
             Cloudflare.html(sectionUrl(base, data)) to base
+        } catch (cancel: CancellationException) {
+            throw cancel
         } catch (first: Exception) {
             Domains.invalidate()
             base = Domains.base(force = true)
@@ -317,6 +328,8 @@ class TollystreamProvider(
         var base = Domains.base()
         return try {
             Cloudflare.html(Domains.rewrite(url, base)) to base
+        } catch (cancel: CancellationException) {
+            throw cancel
         } catch (first: Exception) {
             Domains.invalidate()
             base = Domains.base(force = true)

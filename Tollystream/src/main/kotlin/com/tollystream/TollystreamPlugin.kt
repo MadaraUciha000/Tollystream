@@ -23,8 +23,5 @@ class TollystreamPlugin : Plugin() {
                 .show()
         }
         registerMainAPI(TollystreamProvider())
-        listOf("ta", "te", "hi", "ml", "kn", "multi").forEach { language ->
-            registerMainAPI(TollystreamProvider(language))
-        }
     }
 }

@@ -1,6 +1,8 @@
 package com.tollystream
 
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 1TamilMV rotates domains constantly and most mirrors are dead at any given time.
@@ -35,7 +37,9 @@ object Domains {
 
         for (candidate in candidates) {
             val html = try {
-                Cloudflare.html("$candidate/")
+                withTimeoutOrNull(4_000L) { Cloudflare.html("$candidate/", timeout = 4) }
+            } catch (cancel: CancellationException) {
+                throw cancel
             } catch (e: Exception) {
                 null
             } ?: continue

@@ -1,4 +1,4 @@
-version = 2
+version = 3
 
 plugins {
     id("com.lagradost.cloudstream3.gradle")

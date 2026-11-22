@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.nicehttp.NiceResponse
+import kotlinx.coroutines.CancellationException
 
 /**
  * Single Cloudflare bypass layer used by every request in this plugin.
@@ -31,7 +32,7 @@ object Cloudflare {
         "Sec-Fetch-User" to "?1",
     )
 
-    suspend fun get(url: String, referer: String? = null, timeout: Long = 30): NiceResponse {
+    suspend fun get(url: String, referer: String? = null, timeout: Long = 15): NiceResponse {
         return app.get(
             url,
             headers = browserHeaders,
@@ -41,13 +42,14 @@ object Cloudflare {
         )
     }
 
-    /** Fetch a page body. On failure the CF session is reset and the request is retried once. */
-    suspend fun html(url: String, referer: String? = null): String {
+    /** CloudflareKiller handles challenges; avoid retrying cancellation/timeouts here. */
+    suspend fun html(url: String, referer: String? = null, timeout: Long = 15): String {
         return try {
-            get(url, referer).text
+            get(url, referer, timeout).text
+        } catch (cancel: CancellationException) {
+            throw cancel
         } catch (first: Exception) {
-            killer = null
-            get(url, referer).text
+            throw first
         }
     }
 }
